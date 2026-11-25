@@ -1,0 +1,5 @@
+flask>=3.0
+pillow>=10.0
+pillow-heif>=0.16      # HEIC-Fotos vom iPhone
+pymobiledevice3>=4.0   # iPhone über USB
+pyobjc-framework-ImageCaptureCore>=10.0; sys_platform == "darwin"   # Löschen vom iPhone
