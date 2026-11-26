@@ -137,6 +137,10 @@ def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job) -> Job:
         job.state, job.message = "error", str(e)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        try:
+            source.close()
+        except Exception:
+            pass
     return job
 
 

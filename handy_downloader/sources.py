@@ -14,6 +14,7 @@ import os
 import sys
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,9 @@ class Source:
 
     def fetch(self, rf: RemoteFile, dest: Path) -> None:
         raise NotImplementedError
+
+    def close(self) -> None:
+        """Verbindung zur Quelle schließen (falls nötig)."""
 
     def delete(self, files: list[RemoteFile]) -> dict[str, str | None]:
         """Dateien auf der Quelle löschen. Ergebnis: Pfad → None (ok) oder Fehlertext."""
@@ -186,15 +190,36 @@ def detect_android() -> list[Source]:
 
 
 # --------------------------------------------------------------------------- iPhone (pymobiledevice3)
-def _sync(value):
-    """pymobiledevice3 ist je nach Version synchron oder asynchron – beides unterstützen."""
+# Neuere pymobiledevice3-Versionen (ab ca. 5.x) sind asynchron, ältere synchron. Damit Verbindungen
+# gültig bleiben, laufen alle iPhone-Aufrufe in EINER dauerhaft laufenden Ereignisschleife.
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_lock = threading.Lock()
+
+
+def _get_loop() -> asyncio.AbstractEventLoop:
+    global _loop
+    with _loop_lock:
+        if _loop is None:
+            _loop = asyncio.new_event_loop()
+            threading.Thread(target=_loop.run_forever, name="iphone-loop", daemon=True).start()
+        return _loop
+
+
+def _sync(value, timeout: float = 600):
+    """Ergebnis holen – egal ob die Bibliothek synchron oder asynchron antwortet."""
     if inspect.isawaitable(value):
-        return asyncio.run(_await(value))
+        async def runner():
+            return await value
+        return asyncio.run_coroutine_threadsafe(runner(), _get_loop()).result(timeout)
     return value
 
 
-async def _await(v):
-    return await v
+def _call(fn, *args, **kwargs):
+    """Funktion IN der Ereignisschleife aufrufen (manche Objekte müssen dort erzeugt werden)."""
+    async def runner():
+        res = fn(*args, **kwargs)
+        return await res if inspect.isawaitable(res) else res
+    return asyncio.run_coroutine_threadsafe(runner(), _get_loop()).result(600)
 
 
 class IPhoneSource(Source):
@@ -205,15 +230,31 @@ class IPhoneSource(Source):
         self.id = f"iphone:{udid}"
         self.name = name or "iPhone"
         self._afc = None
+        self._lockdown = None
 
     def _service(self):
         if self._afc is None:
             from pymobiledevice3.lockdown import create_using_usbmux  # type: ignore
             from pymobiledevice3.services.afc import AfcService  # type: ignore
 
-            lockdown = _sync(create_using_usbmux(serial=self.udid))
-            self._afc = AfcService(lockdown=lockdown)
+            self._lockdown = _call(create_using_usbmux, serial=self.udid)
+            afc = _call(AfcService, lockdown=self._lockdown)
+            if hasattr(afc, "__aenter__"):  # neue Versionen: Verbindung ausdrücklich öffnen
+                afc = _sync(afc.__aenter__()) or afc
+            self._afc = afc
         return self._afc
+
+    def close(self) -> None:
+        afc, ld, self._afc, self._lockdown = self._afc, self._lockdown, None, None
+        for obj, meth in ((afc, "__aexit__"), (afc, "close"), (ld, "close")):
+            if obj is None or not hasattr(obj, meth):
+                continue
+            try:
+                _sync(getattr(obj, meth)(None, None, None) if meth == "__aexit__" else getattr(obj, meth)(), 15)
+                if meth == "__aexit__":
+                    break  # schließt bereits alles von AFC
+            except Exception:
+                pass
 
     def list_files(self) -> Iterator[RemoteFile]:
         afc = self._service()
@@ -242,7 +283,7 @@ class IPhoneSource(Source):
     def fetch(self, rf: RemoteFile, dest: Path) -> None:
         afc = self._service()
         # Stückweise lesen, damit auch große Videos nicht komplett im Speicher landen
-        try:
+        if hasattr(afc, "fopen") and hasattr(afc, "fread"):
             fh = _sync(afc.fopen(rf.path, "r"))
             try:
                 with open(dest, "wb") as out:
@@ -253,7 +294,7 @@ class IPhoneSource(Source):
                         out.write(chunk)
             finally:
                 _sync(afc.fclose(fh))
-        except AttributeError:
+        else:
             dest.write_bytes(_sync(afc.get_file_contents(rf.path)))
         if dest.stat().st_size != rf.size and rf.size:
             raise IOError(f"Unvollständig übertragen: {rf.name}")
@@ -281,6 +322,10 @@ class IPhoneSource(Source):
         return {rf.path: data["results"].get(rf.path, "nicht bearbeitet") for rf in files}
 
 
+
+_iphone_names: dict[str, str] = {}
+
+
 def detect_iphones() -> list[Source]:
     try:
         from pymobiledevice3.usbmux import list_devices  # type: ignore
@@ -289,18 +334,23 @@ def detect_iphones() -> list[Source]:
         return []
     out: list[Source] = []
     try:
-        devices = _sync(list_devices())
+        devices = _call(list_devices)
     except Exception:
         return []
     for dev in devices:
         if str(getattr(dev, "connection_type", "USB")).upper() != "USB":
             continue
-        name = "iPhone"
-        try:
-            ld = _sync(create_using_usbmux(serial=dev.serial, autopair=False))
-            name = ld.display_name or ld.short_info.get("DeviceName") or name
-        except Exception:
-            pass  # noch nicht vertraut – Import fragt dann am Handy „Vertrauen?“
+        name = _iphone_names.get(dev.serial)
+        if name is None:  # Namen nur einmal pro Gerät abfragen, nicht alle 4 Sekunden
+            try:
+                ld = _call(create_using_usbmux, serial=dev.serial, autopair=False)
+                info = ld.short_info if isinstance(getattr(ld, "short_info", None), dict) else {}
+                name = info.get("DeviceName") or ld.display_name or "iPhone"
+                _iphone_names[dev.serial] = name
+                if hasattr(ld, "close"):
+                    _sync(ld.close(), 10)
+            except Exception:
+                name = "iPhone"  # noch nicht vertraut – beim Import fragt das iPhone „Vertrauen?“
         out.append(IPhoneSource(dev.serial, name))
     return out
 

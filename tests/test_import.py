@@ -159,3 +159,89 @@ def test_android_delete_command(env):
     res = src.delete([RemoteFile(str(tricky), tricky.name, 1, 0), RemoteFile(str(d / "weg.jpg"), "weg.jpg", 1, 0)])
     assert res == {str(tricky): None, str(d / "weg.jpg"): "nicht gefunden"}
     assert not tricky.exists()
+
+
+def test_iphone_with_async_library(env, monkeypatch):
+    """Simuliert die neue, asynchrone pymobiledevice3: Verbindungen sind an EINE Ereignisschleife gebunden."""
+    import asyncio
+    import types
+
+    files = {"/DCIM/100APPLE/IMG_0001.JPG": None, "/DCIM/100APPLE/IMG_0002.MOV": b"\x00" * 3000}
+    jpg = env / "src.jpg"
+    make_camera_jpg(jpg, "2025:04:05 06:07:08")
+    files["/DCIM/100APPLE/IMG_0001.JPG"] = jpg.read_bytes()
+
+    class Bound:
+        def __init__(self):
+            self.loop = asyncio.get_running_loop()  # wie echte asyncio-Verbindungen
+
+        def check(self):
+            assert asyncio.get_running_loop() is self.loop, "Verbindung in fremder Ereignisschleife benutzt"
+
+    class Lockdown(Bound):
+        short_info = {"DeviceName": "Johannes' iPhone"}
+        display_name = "iPhone 15 Pro"
+
+        async def close(self):
+            self.check()
+
+    async def create_using_usbmux(serial=None, autopair=True):
+        return Lockdown()
+
+    async def list_devices():
+        return [types.SimpleNamespace(serial="UDID1", connection_type="USB")]
+
+    class AfcService(Bound):
+        def __init__(self, lockdown):
+            super().__init__()
+            self.open, self.handles = False, {}
+
+        async def __aenter__(self):
+            self.check(); self.open = True; return self
+
+        async def __aexit__(self, *a):
+            self.check(); self.open = False
+
+        async def listdir(self, d):
+            self.check(); assert self.open
+            if d == "/DCIM":
+                return ["100APPLE"]
+            return sorted(p.rsplit("/", 1)[1] for p in files if p.startswith(d + "/"))
+
+        async def stat(self, p):
+            self.check()
+            if p in files:
+                return {"st_ifmt": "S_IFREG", "st_size": len(files[p]), "st_mtime": datetime(2025, 4, 5)}
+            return {"st_ifmt": "S_IFDIR", "st_size": 0, "st_mtime": datetime(2025, 1, 1)}
+
+        async def fopen(self, p, mode="r"):
+            self.check(); self.handles[1] = [files[p], 0]; return 1
+
+        async def fread(self, h, n):
+            self.check(); data, pos = self.handles[h]; self.handles[h][1] = pos + n; return data[pos:pos + n]
+
+        async def fclose(self, h):
+            self.check(); self.handles.pop(h)
+
+    mods = {
+        "pymobiledevice3": types.ModuleType("pymobiledevice3"),
+        "pymobiledevice3.lockdown": types.SimpleNamespace(create_using_usbmux=create_using_usbmux),
+        "pymobiledevice3.usbmux": types.SimpleNamespace(list_devices=list_devices),
+        "pymobiledevice3.services": types.ModuleType("pymobiledevice3.services"),
+        "pymobiledevice3.services.afc": types.SimpleNamespace(AfcService=AfcService),
+    }
+    for k, v in mods.items():
+        monkeypatch.setitem(sys.modules, k, v)
+
+    from handy_downloader.sources import detect_iphones
+    from handy_downloader.catalog import Catalog
+    from handy_downloader.importer import Job, run_import, DEFAULT_CONFIG
+
+    devs = detect_iphones()
+    assert [(d.kind, d.name) for d in devs] == [("iphone", "Johannes' iPhone")]
+    cfg = dict(DEFAULT_CONFIG, target=str(env / "Bilder"))
+    job = run_import(devs[0], cfg, Catalog(env / "k.sqlite"), Job())
+    assert (job.state, job.imported, job.errors) == ("done", 2, 0), job.message
+    assert (env / "Bilder/2025/04.25/Fotos/IMG_0001.JPG").read_bytes() == files["/DCIM/100APPLE/IMG_0001.JPG"]
+    assert (env / "Bilder/2025/04.25/Videos/IMG_0002.MOV").stat().st_size == 3000
+    assert devs[0]._afc is None  # Verbindung wurde wieder geschlossen
