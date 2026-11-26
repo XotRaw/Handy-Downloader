@@ -33,6 +33,8 @@ Handy-Import/
   wie groß sind sie (z. B. „Videos: 48 · 6,2 GB“), und was davon fehlt noch auf dem Mac.
 - **Gezielt importieren**: Häkchen setzen, z. B. **nur Videos** oder **nur Screenshots** holen –
   den Rest später. Nichts wird doppelt geladen.
+- **Pause & Stoppen**: Import jederzeit mit **⏸ Pause** anhalten und mit **▶ Fortsetzen** genau
+  dort weitermachen – oder **⏹ Stoppen**: Schon Kopiertes bleibt, der Rest kommt beim nächsten Import.
 - **Speicheranzeige fürs Archiv**: Balken zeigt, wie viel Platz Kamera-Fotos, Extern, Screenshots
   und Videos auf dem Mac belegen.
 - **Platz auf dem Handy schaffen**: Nach dem Import Bilder/Videos antippen, die vom Handy

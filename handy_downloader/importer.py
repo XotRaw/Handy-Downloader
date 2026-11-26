@@ -78,12 +78,20 @@ class Job:
     only: list = field(default_factory=list)   # leer = alles importieren
     scan: dict = field(default_factory=dict)   # Übersicht: Typ → Anzahl/Größe (gesamt + neu)
     started: float = 0.0
+    paused: bool = False
+    stopped: bool = False          # vom Benutzer gestoppt (Rest kommt beim nächsten Import)
     cancel: bool = False
 
     def as_dict(self) -> dict:
         d = asdict(self)
         d.pop("cancel")
         return d
+
+
+def wait_while_paused(job: Job) -> None:
+    """Hält zwischen zwei Dateien an, solange „Pause“ gedrückt ist (Stoppen beendet die Pause)."""
+    while job.paused and not job.cancel:
+        time.sleep(0.3)
 
 
 def summarize(source: Source, files: list, catalog: Catalog) -> dict:
@@ -107,7 +115,9 @@ def run_scan(source: Source, catalog: Catalog, job: Job) -> Job:
         for rf in source.list_files():
             files.append(rf)
             job.done += 1
+            wait_while_paused(job)
             if job.cancel:
+                job.stopped = True
                 break
         job.scan = summarize(source, files, catalog)
         job.state = "done"
@@ -134,9 +144,16 @@ def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job, only: list
                  if (not only or quick_category(rf.path) in only)
                  and not catalog.was_seen(source.id, rf.path, rf.size)]
         job.total, job.state = len(files), "importing"
+        failed_in_row = 0
         for rf in files:
+            wait_while_paused(job)
             if job.cancel:
-                job.message = "Abgebrochen"
+                job.stopped = True
+                left = job.total - job.done
+                job.message = f"Gestoppt – {left} Dateien übrig, die kommen beim nächsten Import"
+                break
+            if failed_in_row >= 5:
+                job.message = "Verbindung zum Gerät verloren? Mehrere Dateien hintereinander fehlgeschlagen – Import beendet"
                 break
             job.current = rf.name
             tmp = staging / f"{time.time_ns()}_{rf.name}"
@@ -167,8 +184,10 @@ def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job, only: list
                 catalog.mark_seen(source.id, rf.path, rf.size, rf.mtime, digest)
                 job.imported += 1
                 job.by_category[info.category] = job.by_category.get(info.category, 0) + 1
+                failed_in_row = 0
             except Exception as e:  # einzelne Datei kaputt → weitermachen
                 job.errors += 1
+                failed_in_row += 1
                 job.message = f"{rf.name}: {e}"
                 tmp.unlink(missing_ok=True)
             finally:
@@ -291,3 +310,11 @@ class ImportManager:
 
     def cancel(self) -> None:
         self.job.cancel = True
+        self.job.paused = False
+
+    def pause(self, on: bool) -> bool:
+        """Nur Import und Übersicht lassen sich pausieren – das Löschen läuft immer zu Ende."""
+        if not self.busy or self.job.kind == "delete":
+            return False
+        self.job.paused = on
+        return True

@@ -48,7 +48,11 @@ def _import_finished(job) -> None:
         txt = f"{job.deleted} Dateien gelöscht, {_gb(job.freed)} frei"
         notify("Handy-Downloader", f"{job.source}: {txt}" + (f", {job.errors} nicht gelöscht" if job.errors else ""))
         return
+    if job.kind == "scan":
+        return
     parts = [f"{job.imported} neu"]
+    if job.stopped:
+        parts.append(f"gestoppt, {job.total - job.done} übrig")
     if job.duplicates:
         parts.append(f"{job.duplicates} schon vorhanden")
     if job.errors:
@@ -167,6 +171,12 @@ def phone_delete():
     rows = catalog.phone_rows(src.id, rids)
     ok = manager.start_delete(src, rows, on_done=_import_finished)
     return jsonify(ok=ok, error=None if ok else "Es läuft gerade ein anderer Vorgang")
+
+
+@app.post("/api/pause")
+def pause():
+    on = bool((request.get_json(silent=True) or {}).get("on", True))
+    return jsonify(ok=manager.pause(on))
 
 
 @app.post("/api/cancel")

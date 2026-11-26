@@ -281,3 +281,48 @@ def test_overview_and_selective_import(env):
     f = cat.facets()
     assert f["sizes"]["video"] == 10000 and f["categories"] == {"video": 2, "kamera": 1, "screenshot": 1}
     assert f["sizes"]["kamera"] == (dcim / "IMG_0001.JPG").stat().st_size
+
+
+def test_pause_resume_and_stop(env):
+    import threading
+    import time
+    from handy_downloader.catalog import Catalog
+    from handy_downloader.importer import Job, run_import, DEFAULT_CONFIG
+    from handy_downloader.sources import FolderSource
+
+    class SlowPhone(FolderSource):
+        def fetch(self, rf, dest):
+            time.sleep(0.1)
+            super().fetch(rf, dest)
+
+    dcim = env / "Handy" / "DCIM"
+    dcim.mkdir(parents=True)
+    for i in range(8):
+        (dcim / f"IMG_{i:04d}.MOV").write_bytes(bytes([i]) * 1000)
+    src = SlowPhone(dcim, kind="volume")
+    cat = Catalog(env / "k.sqlite")
+    cfg = dict(DEFAULT_CONFIG, target=str(env / "Bilder"))
+    job = Job()
+    t = threading.Thread(target=run_import, args=(src, cfg, cat, job))
+    t.start()
+
+    while job.done < 2:
+        time.sleep(0.02)
+    job.paused = True
+    time.sleep(0.3)                     # laufende Datei wird noch fertig
+    stand = job.done
+    time.sleep(0.5)
+    assert job.done == stand and job.state == "importing"   # pausiert: nichts passiert
+
+    job.paused = False                   # Fortsetzen
+    while job.done < stand + 2:
+        time.sleep(0.02)
+    job.cancel = True                    # Stoppen
+    t.join(5)
+    assert job.state == "done" and job.stopped and 0 < job.imported < 8
+    assert "übrig" in job.message
+
+    # Später: Rest holen, nichts doppelt
+    rest = run_import(src, cfg, cat, Job())
+    assert rest.imported == 8 - job.imported and rest.duplicates == 0
+    assert len([p for p in (env / "Bilder").rglob("*") if p.is_file()]) == 8

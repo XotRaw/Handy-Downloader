@@ -89,7 +89,10 @@ button.danger{background:#d70015;color:#fff;border-color:#d70015}
         <div><b id="jobtitle"></b> <span id="jobtext" class="muted"></span></div>
         <div class="bar"><div id="jobbar"></div></div>
         <div id="jobcats" class="muted" style="font-size:13px"></div>
-        <button id="cancelbtn" style="margin-top:8px">Abbrechen</button>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button id="pausebtn">⏸ Pause</button>
+          <button id="cancelbtn">⏹ Stoppen</button>
+        </div>
       </div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="importFolder()">Ordner vom Mac importieren …</button>
@@ -197,7 +200,12 @@ document.querySelectorAll(".chip").forEach(b => b.onclick = () => {
 });
 [["f_year","year"],["f_month","month"],["f_mp","min_mp"],["f_camera","camera"]].forEach(([id,k]) => $(id).onchange = e => {filt[k]=e.target.value; load();});
 let qt; $("f_q").oninput = e => {clearTimeout(qt); qt = setTimeout(() => {filt.q = e.target.value; load();}, 250);};
-$("cancelbtn").onclick = () => post("/api/cancel");
+let jobPaused = false;
+$("pausebtn").onclick = async () => { await post("/api/pause", {on: !jobPaused}); refresh(); };
+$("cancelbtn").onclick = async () => {
+  if (!confirm("Wirklich stoppen?\n\nSchon kopierte Dateien bleiben erhalten. Der Rest kommt beim nächsten Import – nichts wird doppelt geladen.")) return;
+  await post("/api/cancel"); refresh();
+};
 
 async function refresh() {
   const s = await fetch("/api/status").then(r=>r.json());
@@ -229,7 +237,15 @@ async function refresh() {
     $("jobtext").textContent = st + (j.state==="done" && j.message ? ` (${j.message})` : "");
     $("jobbar").style.width = (j.total ? 100*j.done/j.total : (j.state==="done"?100:5)) + "%";
     $("jobcats").textContent = Object.entries(j.by_category).map(([k,v]) => `${ICON[k]} ${LABELS[k]}: ${v}`).join("   ");
-    $("cancelbtn").style.display = s.busy ? "" : "none";
+    jobPaused = j.paused;
+    const canPause = s.busy && j.kind !== "delete";
+    $("pausebtn").style.display = canPause ? "" : "none";
+    $("pausebtn").textContent = j.paused ? "▶ Fortsetzen" : "⏸ Pause";
+    $("pausebtn").className = j.paused ? "primary" : "";
+    $("cancelbtn").style.display = s.busy && !(j.kind === "delete" && j.state === "deleting") ? "" : "none";
+    $("cancelbtn").textContent = j.kind === "delete" ? "Abbrechen" : "⏹ Stoppen";
+    $("jobbar").style.background = j.paused ? "#e8a400" : "";
+    if (j.paused) $("jobtext").textContent = `⏸ pausiert bei ${j.done} von ${j.total || "?"} – mit „Fortsetzen“ geht es genau hier weiter`;
     if (j.kind==="delete" && j.state==="done" && cleanup.open && cleanup.lastJob!==j.started) { cleanup.lastJob=j.started; loadCleanup(); }
     if (j.imported !== lastDone) { lastDone = j.imported; if (!s.busy || j.imported % 25 === 0) load(); }
   }
