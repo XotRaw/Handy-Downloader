@@ -74,6 +74,24 @@ class MediaInfo:
         return None
 
 
+# Grobe Einteilung VOR dem Herunterladen (nur anhand von Name/Ordner), für „nur Videos importieren“ usw.
+# Ob ein Foto selbst aufgenommen oder extern ist, steht erst nach dem Herunterladen fest (EXIF).
+QUICK_LABELS = {"foto": "Fotos", "video": "Videos", "screenshot": "Screenshots"}
+QUICK_OF = {"kamera": "foto", "extern": "foto", "screenshot": "screenshot", "video": "video"}
+
+
+def quick_category(path: str) -> str:
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    low = "/" + path.lower().replace("\\", "/")
+    if is_video(name):
+        return "video"
+    if _SCREENSHOT_NAME.search(name) or "/screenshots/" in low or "/screenshot/" in low:
+        return "screenshot"
+    if name.lower().endswith(".png") and "/dcim/" in low:
+        return "screenshot"  # das iPhone legt Screenshots als PNG im Kamera-Ordner ab
+    return "foto"
+
+
 def is_media(name: str) -> bool:
     return Path(name).suffix.lower() in MEDIA_EXT
 

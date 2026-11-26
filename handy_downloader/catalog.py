@@ -137,13 +137,14 @@ class Catalog:
         with self._lock:
             years = [dict(r) for r in self.db.execute(
                 "SELECT year, COUNT(*) n FROM media GROUP BY year ORDER BY year DESC")]
-            cats = {r["category"]: r["n"] for r in self.db.execute(
-                "SELECT category, COUNT(*) n FROM media GROUP BY category")}
+            rows = self.db.execute("SELECT category, COUNT(*) n, COALESCE(SUM(size),0) b FROM media GROUP BY category").fetchall()
+            cats = {r["category"]: r["n"] for r in rows}
+            sizes = {r["category"]: r["b"] for r in rows}
             cams = [r["camera"] for r in self.db.execute(
                 "SELECT camera, COUNT(*) n FROM media WHERE camera IS NOT NULL GROUP BY camera ORDER BY n DESC")]
             devs = [r["device"] for r in self.db.execute(
                 "SELECT DISTINCT device FROM media WHERE device IS NOT NULL ORDER BY device")]
-        return {"years": years, "categories": cats, "cameras": cams, "devices": devs}
+        return {"years": years, "categories": cats, "sizes": sizes, "cameras": cams, "devices": devs}
 
     def forget_missing(self) -> int:
         """Einträge entfernen, deren Datei im Finder gelöscht wurde."""

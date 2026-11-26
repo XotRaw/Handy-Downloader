@@ -20,7 +20,20 @@ main{max-width:1400px;margin:0 auto;padding:16px 20px 60px}
 button,.btn{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 12px;border-radius:8px;cursor:pointer}
 button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
-.dev{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.dev{padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.devhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+table.scan{width:100%;border-collapse:collapse;margin:10px 0 6px;font-size:14px}
+table.scan th{font-weight:500;color:var(--muted);text-align:left;font-size:12px;padding:4px 6px}
+table.scan td{padding:6px;border-top:1px solid var(--line)}
+table.scan td.num,table.scan th.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+table.scan tr.sum td{font-weight:600}
+table.scan tr.off td{opacity:.45}
+.scanacts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.storage{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-top:16px}
+.stbar{display:flex;height:14px;border-radius:99px;overflow:hidden;background:var(--line);margin:8px 0}
+.stbar>div{height:100%}
+.stleg{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px}
+.stleg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .dev .ico{font-size:24px}.dev .nm{flex:1;font-weight:600}.dev small{color:var(--muted);font-weight:400;display:block}
 .muted{color:var(--muted)}
 .bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin:8px 0}
@@ -100,6 +113,12 @@ button.danger{background:#d70015;color:#fff;border-color:#d70015}
     </section>
   </div>
 
+  <div class="storage" id="storage" style="display:none">
+    <b>Speicher im Archiv auf dem Mac</b> <span class="muted" id="sttotal"></span>
+    <div class="stbar" id="stbar"></div>
+    <div class="stleg" id="stleg"></div>
+  </div>
+
   <div class="filters">
     <button class="chip on" data-type="">Alles<span class="n" id="n_all"></span></button>
     <button class="chip" data-type="kamera">📷 Kamera-Fotos<span class="n" id="n_kamera"></span></button>
@@ -123,11 +142,11 @@ button.danger{background:#d70015;color:#fff;border-color:#d70015}
 <div id="cl">
   <div class="top">
     <h2>🧹 Platz schaffen auf <span id="clname"></span></h2>
-    <button class="chip on" data-ct="">Alles</button>
-    <button class="chip" data-ct="video">🎬 Videos</button>
-    <button class="chip" data-ct="kamera">📷 Fotos</button>
-    <button class="chip" data-ct="screenshot">🖥 Screenshots</button>
-    <button class="chip" data-ct="extern">🌐 Extern</button>
+    <button class="chip on" data-ct="">Alles<span class="n" id="cn_"></span></button>
+    <button class="chip" data-ct="video">🎬 Videos<span class="n" id="cn_video"></span></button>
+    <button class="chip" data-ct="kamera">📷 Fotos<span class="n" id="cn_kamera"></span></button>
+    <button class="chip" data-ct="screenshot">🖥 Screenshots<span class="n" id="cn_screenshot"></span></button>
+    <button class="chip" data-ct="extern">🌐 Extern<span class="n" id="cn_extern"></span></button>
     <select id="cl_age">
       <option value="0">jedes Alter</option><option value="1">älter als 1 Monat</option>
       <option value="3">älter als 3 Monate</option><option value="6">älter als 6 Monate</option>
@@ -186,21 +205,24 @@ async function refresh() {
   // Geräte
   const d = $("devices");
   devs = s.devices;
-  d.innerHTML = s.devices.length ? s.devices.map((x, i) => `
-    <div class="dev"><span class="ico">${KIND[x.kind]||"📱"}</span>
+  scans = s.scans || {}; busy = s.busy;
+  const devHtml = s.devices.length ? s.devices.map((x, i) => `
+    <div class="dev"><div class="devhead"><span class="ico">${KIND[x.kind]||"📱"}</span>
       <span class="nm">${esc(x.name)}<small>${{iphone:"iPhone / iPad über USB",android:"Android über USB (adb)",volume:"Laufwerk mit DCIM"}[x.kind]||""}</small></span>
-      <button class="primary" ${s.busy?"disabled":""} onclick="startImport(devs[${i}].id)">Importieren</button>
-      <button ${s.busy?"disabled":""} onclick="openCleanup(devs[${i}])">Platz schaffen …</button></div>`).join("")
+      <button ${s.busy?"disabled":""} onclick="openCleanup(devs[${i}])">Platz schaffen …</button></div>
+      ${scanTable(x, i)}</div>`).join("")
     : `<p class="muted">Kein Handy erkannt. Handy per Kabel anstecken und entsperren – beim iPhone „Diesem Computer vertrauen“ bestätigen.</p>`;
+  if (d.dataset.h !== devHtml) { d.innerHTML = devHtml; d.dataset.h = devHtml; }
   // Job
   const j = s.job;
   if (j.state !== "idle") {
     $("jobbox").style.display = "";
-    $("jobtitle").textContent = j.source;
-    const st = {scanning:"liest Dateiliste …", importing:`${j.done} von ${j.total} – ${j.current||""}`,
+    $("jobtitle").textContent = j.source + (j.only && j.only.length ? ` (nur ${j.only.map(k=>QL[k]).join(" + ")})` : "");
+    const st = {scanning: j.kind==="scan" ? `sieht nach, was auf dem Gerät ist … ${j.done} Dateien gefunden` : "liest Dateiliste …", importing:`${j.done} von ${j.total} – ${j.current||""}`,
                 verifying:`prüft Sicherung auf dem Mac: ${j.done} von ${j.total}`,
                 deleting:`löscht ${j.total - j.errors} Dateien vom Gerät … (Handy entsperrt lassen)`,
-                done: j.kind==="delete"
+                done: j.kind==="scan" ? "Übersicht ist aktuell – unten auswählen, was importiert werden soll"
+                  : j.kind==="delete"
                   ? `fertig: ${j.deleted} vom Gerät gelöscht, ${fmtSize(j.freed)} frei${j.errors?`, ${j.errors} nicht gelöscht`:""}`
                   : `fertig: ${j.imported} neu, ${j.duplicates} schon vorhanden${j.errors?`, ${j.errors} Fehler`:""}`,
                 error:"Fehler: "+j.message}[j.state];
@@ -224,8 +246,11 @@ async function refresh() {
   $("example").textContent = `Beispiel: ${cfg.target.replace(/\/$/,"")}/2025/${ex}/${cfg.split_by_type?"Fotos/":""}IMG_1234.HEIC`;
   // Zahlen + Filterlisten
   const f = s.facets, c = f.categories, all = Object.values(c).reduce((a,b)=>a+b,0);
-  $("n_all").textContent = all; for (const k of ["kamera","extern","screenshot","video"]) $("n_"+k).textContent = c[k]||0;
-  $("hdrstat").textContent = `${all} Dateien im Archiv`;
+  const sz = f.sizes || {}, total = Object.values(sz).reduce((a,b)=>a+b,0);
+  $("n_all").textContent = all ? `${all} · ${fmtSize(total)}` : 0;
+  for (const k of ["kamera","extern","screenshot","video"]) $("n_"+k).textContent = c[k] ? `${c[k]} · ${fmtSize(sz[k]||0)}` : 0;
+  $("hdrstat").textContent = `${all} Dateien · ${fmtSize(total)} im Archiv`;
+  renderStorage(sz, total);
   fillSel("f_year", "Alle Jahre", f.years.map(y => [y.year, `${y.year} (${y.n})`]));
   fillSel("f_camera", "Alle Kameras", f.cameras.map(x => [x, x]));
 }
@@ -234,7 +259,7 @@ function fillSel(id, first, opts) {
   if (el.dataset.h !== html) { el.innerHTML = html; el.dataset.h = html; el.value = v; }
 }
 
-async function startImport(id) { const r = await post("/api/import", {source:id}); if (!r.ok) alert(r.error); refresh(); }
+async function startImport(id, only) { const r = await post("/api/import", {source:id, only:only||[]}); if (!r.ok) alert(r.error); refresh(); }
 async function importFolder() {
   let {path} = await post("/api/choose-folder", {prompt:"Ordner mit Fotos/Videos wählen"});
   if (!path) path = prompt("Pfad zum Ordner:"); if (!path) return;
@@ -291,9 +316,57 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowLeft" && i > 0) openLb(i-1);
 });
 
+// ------------------------------------------------------------ Übersicht & gezielter Import
+const QL = {foto:"Fotos", video:"Videos", screenshot:"Screenshots"};
+const QI = {foto:"📷", video:"🎬", screenshot:"🖥"};
+let scans = {}, busy = false;
+const picks = {};   // Geräte-ID → ausgewählte Typen (bleibt beim Neuzeichnen erhalten)
+
+function scanTable(x, i) {
+  const sc = scans[x.id];
+  if (!sc) return `<div class="scanacts" style="margin-top:8px">
+      <span class="muted" style="flex:1">Noch nicht nachgesehen, was auf dem Gerät ist.</span>
+      <button ${busy?"disabled":""} onclick="startScan(devs[${i}].id)">Inhalt prüfen</button>
+      <button class="primary" ${busy?"disabled":""} onclick="startImport(devs[${i}].id)">Alles importieren</button></div>`;
+  const c = sc.cats;
+  // neue Übersicht (z. B. nach einem Import) → automatisch das auswählen, was noch fehlt
+  if (!picks[x.id] || picks[x.id].at !== sc.at) { picks[x.id] = new Set(Object.keys(QL).filter(k => c[k].new_n > 0)); picks[x.id].at = sc.at; }
+  const p = picks[x.id];
+  let tn=0,tb=0,nn=0,nb=0,sn=0,sb=0;
+  const rows = Object.keys(QL).map(k => {
+    const r = c[k]; tn+=r.n; tb+=r.bytes; nn+=r.new_n; nb+=r.new_bytes;
+    if (p.has(k)) { sn+=r.new_n; sb+=r.new_bytes; }
+    return `<tr class="${p.has(k)?"":"off"}">
+      <td><input type="checkbox" ${p.has(k)?"checked":""} ${r.new_n?"":"disabled"} onchange="pick(devs[${i}].id,'${k}',this.checked)"></td>
+      <td>${QI[k]} ${QL[k]}</td>
+      <td class="num">${r.n} · ${fmtSize(r.bytes)}</td>
+      <td class="num">${r.new_n ? `<b>${r.new_n} · ${fmtSize(r.new_bytes)}</b>` : "✓ alles da"}</td></tr>`;
+  }).join("");
+  return `<table class="scan">
+      <tr><th></th><th>Typ</th><th class="num">auf dem Gerät</th><th class="num">noch nicht auf dem Mac</th></tr>
+      ${rows}
+      <tr class="sum"><td></td><td>Gesamt</td><td class="num">${tn} · ${fmtSize(tb)}</td><td class="num">${nn} · ${fmtSize(nb)}</td></tr>
+    </table>
+    <div class="scanacts">
+      <button class="primary" ${busy||!sn?"disabled":""} onclick="startImport(devs[${i}].id, [...picks[devs[${i}].id]])">${sn ? `${sn} importieren (${fmtSize(sb)})` : "Nichts ausgewählt"}</button>
+      <button ${busy?"disabled":""} onclick="startScan(devs[${i}].id)">Neu prüfen</button>
+      <span class="muted" style="font-size:12px">Fotos werden beim Import automatisch in Kamera-Fotos und Extern getrennt.</span></div>`;
+}
+function pick(id, k, on) { const p = picks[id]; on ? p.add(k) : p.delete(k); refresh(); }
+async function startScan(id) { const r = await post("/api/scan", {source:id}); if (!r.ok) alert(r.error); refresh(); }
+
+function renderStorage(sz, total) {
+  $("storage").style.display = total ? "" : "none";
+  if (!total) return;
+  const order = ["kamera","extern","screenshot","video"];
+  $("sttotal").textContent = "· " + fmtSize(total) + " gesamt";
+  $("stbar").innerHTML = order.filter(k=>sz[k]).map(k => `<div title="${LABELS[k]}: ${fmtSize(sz[k])}" style="width:${100*sz[k]/total}%;background:var(--${k})"></div>`).join("");
+  $("stleg").innerHTML = order.map(k => `<span><i style="background:var(--${k})"></i>${ICON[k]} ${LABELS[k]}: <b>${fmtSize(sz[k]||0)}</b> <span class="muted">(${Math.round(100*(sz[k]||0)/total)} %)</span></span>`).join("");
+}
+
 // ------------------------------------------------------------ Platz schaffen
 const cleanup = {open:false, source:"", name:"", items:[], sel:new Set(), type:"", lastJob:null};
-function fmtSize(b){ return b >= 1e9 ? (b/1e9).toFixed(2).replace(".",",")+" GB" : b >= 1e6 ? Math.round(b/1e6)+" MB" : Math.max(1, Math.round(b/1e3))+" KB"; }
+function fmtSize(b){ if (!b) return "0 MB"; return b >= 1e9 ? (b/1e9).toFixed(2).replace(".",",")+" GB" : b >= 1e6 ? Math.round(b/1e6)+" MB" : Math.max(1, Math.round(b/1e3))+" KB"; }
 document.querySelectorAll("#cl .chip").forEach(b => b.onclick = () => {
   document.querySelectorAll("#cl .chip").forEach(x => x.classList.toggle("on", x===b)); cleanup.type = b.dataset.ct; renderCleanup();
 });
@@ -322,6 +395,9 @@ function visibleCleanup() {
   return v;
 }
 function renderCleanup() {
+  const by = {"":[0,0]};
+  cleanup.items.forEach(m => { for (const k of ["", m.category]) { by[k] = by[k] || [0,0]; by[k][0]++; by[k][1] += m.remote_size||0; } });
+  for (const k of ["","video","kamera","screenshot","extern"]) $("cn_"+k).textContent = by[k] && by[k][0] ? `${by[k][0]} · ${fmtSize(by[k][1])}` : 0;
   const v = visibleCleanup();
   $("clgrid").innerHTML = v.map(m => `
     <div class="tile ${cleanup.sel.has(m.rid)?"sel":""}" data-rid="${m.rid}" onclick="clToggle(${m.rid}, this)">

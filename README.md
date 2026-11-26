@@ -17,7 +17,8 @@ Handy-Import/
 
 ## Was das Programm kann
 
-- **Automatisch beim Anstecken** importieren (iPhone, Android, SD-Karte/Kamera) – mit Mitteilung oben rechts.
+- **Automatisch beim Anstecken** importieren – oder (Einstellung „automatisch importieren“ aus)
+  erst die Übersicht zeigen und selbst auswählen (iPhone, Android, SD-Karte/Kamera) – mit Mitteilung oben rechts.
 - **Ordner nach Jahr und Monat**: `2025/01.25`. Umstellbar auf `1.25` oder `01 Januar`.
 - **Nach Art trennen**: Kamera-Foto, Extern/Download, Screenshot, Video. Erkannt wird das an den
   Kameradaten im Bild (EXIF: Hersteller/Modell). Bilder ohne Kameradaten gelten als „extern“.
@@ -28,6 +29,12 @@ Handy-Import/
 - **Archiv-Ansicht mit Suche & Filtern**: nur Videos, nur Kamera-Fotos, nur Screenshots,
   nach Jahr/Monat, nach Kamera, nur hochauflösende Bilder (z. B. „ab 8 MP“), Suche im Dateinamen.
   Klick öffnet Bild/Video, „Im Finder zeigen“ springt zur Datei.
+- **Übersicht vor dem Import**: Wie viele Fotos, Videos und Screenshots liegen auf dem Handy,
+  wie groß sind sie (z. B. „Videos: 48 · 6,2 GB“), und was davon fehlt noch auf dem Mac.
+- **Gezielt importieren**: Häkchen setzen, z. B. **nur Videos** oder **nur Screenshots** holen –
+  den Rest später. Nichts wird doppelt geladen.
+- **Speicheranzeige fürs Archiv**: Balken zeigt, wie viel Platz Kamera-Fotos, Extern, Screenshots
+  und Videos auf dem Mac belegen.
 - **Platz auf dem Handy schaffen**: Nach dem Import Bilder/Videos antippen, die vom Handy
   gelöscht werden sollen (siehe unten).
 - Zusätzlich: **beliebigen Ordner vom Mac** importieren und einsortieren (z. B. alte Fotos).

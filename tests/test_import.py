@@ -245,3 +245,39 @@ def test_iphone_with_async_library(env, monkeypatch):
     assert (env / "Bilder/2025/04.25/Fotos/IMG_0001.JPG").read_bytes() == files["/DCIM/100APPLE/IMG_0001.JPG"]
     assert (env / "Bilder/2025/04.25/Videos/IMG_0002.MOV").stat().st_size == 3000
     assert devs[0]._afc is None  # Verbindung wurde wieder geschlossen
+
+
+def test_overview_and_selective_import(env):
+    from handy_downloader.catalog import Catalog
+    from handy_downloader.importer import Job, run_import, run_scan, DEFAULT_CONFIG
+    from handy_downloader.sources import FolderSource
+
+    dcim = env / "Handy" / "DCIM" / "100APPLE"
+    dcim.mkdir(parents=True)
+    make_camera_jpg(dcim / "IMG_0001.JPG", "2025:05:01 10:00:00")
+    Image.new("RGB", (1179, 2556), "blue").save(dcim / "IMG_0002.PNG")          # Screenshot
+    (dcim / "IMG_0003.MOV").write_bytes(b"\x00" * 7000)
+    (dcim / "IMG_0004.MP4").write_bytes(b"\x00" * 3000)
+    src = FolderSource(env / "Handy" / "DCIM", kind="volume")
+    cat = Catalog(env / "k.sqlite")
+    cfg = dict(DEFAULT_CONFIG, target=str(env / "Bilder"))
+
+    # 1. Nur nachsehen – nichts wird heruntergeladen
+    scan = run_scan(src, cat, Job()).scan
+    assert scan["video"] == {"n": 2, "bytes": 10000, "new_n": 2, "new_bytes": 10000}
+    assert scan["foto"]["n"] == 1 and scan["screenshot"]["n"] == 1
+    assert not (env / "Bilder").exists() or not any(p.is_file() for p in (env / "Bilder").rglob("*"))
+
+    # 2. Nur Videos importieren
+    job = run_import(src, cfg, cat, Job(), only=["video"])
+    assert (job.imported, job.only) == (2, ["video"])
+    assert {p.suffix for p in (env / "Bilder").rglob("*") if p.is_file()} == {".MOV", ".MP4"}
+    assert job.scan["video"]["new_n"] == 0 and job.scan["foto"]["new_n"] == 1  # Übersicht aktualisiert
+
+    # 3. Später den Rest – Videos werden nicht doppelt geholt
+    job = run_import(src, cfg, cat, Job())
+    assert job.imported == 2 and all(v["new_n"] == 0 for v in job.scan.values())
+
+    f = cat.facets()
+    assert f["sizes"]["video"] == 10000 and f["categories"] == {"video": 2, "kamera": 1, "screenshot": 1}
+    assert f["sizes"]["kamera"] == (dcim / "IMG_0001.JPG").stat().st_size

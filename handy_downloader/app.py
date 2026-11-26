@@ -75,7 +75,8 @@ def watcher() -> None:
                 notify("Handy-Downloader", f"{s.name} erkannt – Import startet …")
                 manager.start(s, cfg, on_done=_import_finished)
             else:
-                notify("Handy-Downloader", f"{s.name} erkannt")
+                notify("Handy-Downloader", f"{s.name} erkannt – du kannst auswählen, was importiert wird")
+                manager.start_scan(s)  # gleich nachsehen, wie viel Fotos/Videos/Screenshots drauf sind
         time.sleep(4)
 
 
@@ -99,7 +100,8 @@ def index():
 def status():
     with _dev_lock:
         devs = [s.as_dict() for s in _devices.values()]
-    return jsonify(devices=devs, job=manager.job.as_dict(), busy=manager.busy,
+    scans = {d["id"]: manager.scans[d["id"]] for d in devs if d["id"] in manager.scans}
+    return jsonify(devices=devs, job=manager.job.as_dict(), busy=manager.busy, scans=scans,
                    config=load_config(), facets=catalog.facets(), watch_error=_watch_error,
                    tools={"pymobiledevice3": _has_module("pymobiledevice3"), "adb": bool(shutil.which("adb")),
                           "ffprobe": bool(shutil.which("ffprobe"))})
@@ -124,8 +126,21 @@ def start_import():
             src = _devices.get(data.get("source", ""))
     if not src:
         return jsonify(ok=False, error="Gerät nicht mehr verbunden"), 404
-    ok = manager.start(src, cfg, on_done=_import_finished)
+    only = [o for o in (data.get("only") or []) if o in ("foto", "video", "screenshot")]
+    ok = manager.start(src, cfg, on_done=_import_finished, only=only)
     return jsonify(ok=ok, error=None if ok else "Es läuft bereits ein Import")
+
+
+@app.post("/api/scan")
+def start_scan():
+    """Nur nachsehen, wie viel welcher Typ auf dem Gerät belegt – ohne herunterzuladen."""
+    data = request.get_json(silent=True) or {}
+    with _dev_lock:
+        src = _devices.get(data.get("source", ""))
+    if not src:
+        return jsonify(ok=False, error="Gerät nicht mehr verbunden"), 404
+    ok = manager.start_scan(src)
+    return jsonify(ok=ok, error=None if ok else "Es läuft gerade ein anderer Vorgang")
 
 
 @app.get("/api/phone-files")

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from .catalog import Catalog
-from .media import analyze, target_dir
+from .media import QUICK_LABELS, analyze, quick_category, target_dir
 from .sources import RemoteFile, Source
 
 APP_DIR = Path(os.environ.get("HANDY_DOWNLOADER_HOME", Path.home() / "Library/Application Support/HandyDownloader"))
@@ -75,6 +75,8 @@ class Job:
     current: str = ""
     message: str = ""
     by_category: dict = field(default_factory=dict)
+    only: list = field(default_factory=list)   # leer = alles importieren
+    scan: dict = field(default_factory=dict)   # Übersicht: Typ → Anzahl/Größe (gesamt + neu)
     started: float = 0.0
     cancel: bool = False
 
@@ -84,13 +86,53 @@ class Job:
         return d
 
 
-def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job) -> Job:
+def summarize(source: Source, files: list, catalog: Catalog) -> dict:
+    """Je Typ: wie viele Dateien/Bytes liegen auf dem Gerät, und wie viele davon fehlen noch auf dem Mac."""
+    out = {k: {"n": 0, "bytes": 0, "new_n": 0, "new_bytes": 0} for k in QUICK_LABELS}
+    for rf in files:
+        c = out[quick_category(rf.path)]
+        c["n"] += 1
+        c["bytes"] += rf.size or 0
+        if not catalog.was_seen(source.id, rf.path, rf.size):
+            c["new_n"] += 1
+            c["new_bytes"] += rf.size or 0
+    return out
+
+
+def run_scan(source: Source, catalog: Catalog, job: Job) -> Job:
+    """Nur nachsehen, was auf dem Gerät liegt – nichts herunterladen."""
+    job.__dict__.update(Job(source=source.name, kind="scan", state="scanning", started=time.time()).__dict__)
+    try:
+        files = []
+        for rf in source.list_files():
+            files.append(rf)
+            job.done += 1
+            if job.cancel:
+                break
+        job.scan = summarize(source, files, catalog)
+        job.state = "done"
+    except Exception as e:
+        job.state, job.message = "error", str(e)
+    finally:
+        try:
+            source.close()
+        except Exception:
+            pass
+    return job
+
+
+def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job, only: list | None = None) -> Job:
     root = Path(cfg["target"]).expanduser()
     staging = root / ".handy-tmp"
     staging.mkdir(parents=True, exist_ok=True)
-    job.__dict__.update(Job(source=source.name, state="scanning", started=time.time()).__dict__)
+    only = [o for o in (only or []) if o in QUICK_LABELS]
+    job.__dict__.update(Job(source=source.name, state="scanning", started=time.time(), only=only).__dict__)
+    all_files: list = []
     try:
-        files = [rf for rf in source.list_files() if not catalog.was_seen(source.id, rf.path, rf.size)]
+        all_files = list(source.list_files())
+        files = [rf for rf in all_files
+                 if (not only or quick_category(rf.path) in only)
+                 and not catalog.was_seen(source.id, rf.path, rf.size)]
         job.total, job.state = len(files), "importing"
         for rf in files:
             if job.cancel:
@@ -137,6 +179,8 @@ def run_import(source: Source, cfg: dict, catalog: Catalog, job: Job) -> Job:
         job.state, job.message = "error", str(e)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+        if all_files:
+            job.scan = summarize(source, all_files, catalog)  # aktualisierte Übersicht nach dem Import
         try:
             source.close()
         except Exception:
@@ -194,20 +238,38 @@ class ImportManager:
     def __init__(self, catalog: Catalog):
         self.catalog = catalog
         self.job = Job()
+        self.scans: dict[str, dict] = {}   # Geräte-ID → letzte Übersicht
         self._thread: threading.Thread | None = None
 
     @property
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self, source: Source, cfg: dict, on_done=None) -> bool:
+    def _remember_scan(self, source: Source) -> None:
+        if self.job.scan:
+            self.scans[source.id] = {"cats": self.job.scan, "at": time.time()}
+
+    def start(self, source: Source, cfg: dict, on_done=None, only: list | None = None) -> bool:
         if self.busy:
             return False
 
         def work():
-            run_import(source, cfg, self.catalog, self.job)
+            run_import(source, cfg, self.catalog, self.job, only=only)
+            self._remember_scan(source)
             if on_done:
                 on_done(self.job)
+
+        self._thread = threading.Thread(target=work, daemon=True)
+        self._thread.start()
+        return True
+
+    def start_scan(self, source: Source) -> bool:
+        if self.busy:
+            return False
+
+        def work():
+            run_scan(source, self.catalog, self.job)
+            self._remember_scan(source)
 
         self._thread = threading.Thread(target=work, daemon=True)
         self._thread.start()
@@ -219,6 +281,7 @@ class ImportManager:
 
         def work():
             run_delete(source, rows, self.catalog, self.job)
+            self.scans.pop(source.id, None)  # Übersicht ist veraltet – neu prüfen
             if on_done:
                 on_done(self.job)
 
